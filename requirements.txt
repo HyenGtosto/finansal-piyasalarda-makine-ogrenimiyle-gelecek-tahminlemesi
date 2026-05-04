@@ -1,0 +1,6 @@
+# Proje bağımlılıklarını buraya ekleyin
+numpy
+pandas
+scikit-learn
+matplotlib
+seaborn
