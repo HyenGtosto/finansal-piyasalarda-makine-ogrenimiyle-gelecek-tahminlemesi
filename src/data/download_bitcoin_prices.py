@@ -19,6 +19,8 @@ COINGECKO_MARKET_CHART_RANGE_URL = (
 )
 DEFAULT_OUTPUT_PATH = Path("data/raw/bitcoin_price_raw.csv")
 DEFAULT_LOOKBACK_DAYS = 365
+DEFAULT_GRANULARITY = "hourly"
+MAX_HOURLY_CHUNK_DAYS = 89
 
 
 def _parse_date(value: str) -> date:
@@ -64,6 +66,36 @@ def fetch_bitcoin_market_data(
         raise RuntimeError(f"Could not connect to CoinGecko: {exc.reason}") from exc
 
 
+def fetch_bitcoin_hourly_market_data(
+    start_date: date,
+    end_date: date,
+    vs_currency: str = "usd",
+    chunk_days: int = MAX_HOURLY_CHUNK_DAYS,
+) -> dict[str, Any]:
+    """Fetch hourly-ish CoinGecko data by splitting long ranges into smaller chunks."""
+    if start_date > end_date:
+        raise ValueError("start_date must be earlier than or equal to end_date")
+    if chunk_days < 1:
+        raise ValueError("chunk_days must be greater than 0")
+
+    combined: dict[str, list[Any]] = {
+        "prices": [],
+        "market_caps": [],
+        "total_volumes": [],
+    }
+    chunk_start = start_date
+
+    while chunk_start <= end_date:
+        chunk_end = min(chunk_start + timedelta(days=chunk_days), end_date)
+        raw_chunk = fetch_bitcoin_market_data(chunk_start, chunk_end, vs_currency)
+        for key in combined:
+            combined[key].extend(raw_chunk.get(key, []))
+        print(f"Fetched Bitcoin prices from {chunk_start} to {chunk_end}")
+        chunk_start = chunk_end + timedelta(days=1)
+
+    return combined
+
+
 def build_price_dataframe(raw_data: dict[str, Any]) -> pd.DataFrame:
     """Convert CoinGecko market chart JSON into one raw CSV-friendly table."""
     prices = pd.DataFrame(raw_data.get("prices", []), columns=["timestamp_ms", "price_usd"])
@@ -80,12 +112,24 @@ def build_price_dataframe(raw_data: dict[str, Any]) -> pd.DataFrame:
     data = prices.merge(market_caps, on="timestamp_ms", how="left").merge(
         volumes, on="timestamp_ms", how="left"
     )
+    data = data.drop_duplicates(subset=["timestamp_ms"]).sort_values("timestamp_ms")
+    datetime_utc = pd.to_datetime(data["timestamp_ms"], unit="ms", utc=True)
     data.insert(
         0,
         "date",
-        pd.to_datetime(data["timestamp_ms"], unit="ms", utc=True).dt.date.astype(str),
+        datetime_utc.dt.date.astype(str),
     )
-    return data[["date", "timestamp_ms", "price_usd", "market_cap_usd", "total_volume_usd"]]
+    data.insert(1, "datetime_utc", datetime_utc.dt.strftime("%Y-%m-%dT%H:%M:%SZ"))
+    return data[
+        [
+            "date",
+            "datetime_utc",
+            "timestamp_ms",
+            "price_usd",
+            "market_cap_usd",
+            "total_volume_usd",
+        ]
+    ]
 
 
 def save_raw_data(data: pd.DataFrame, output_path: Path) -> Path:
@@ -116,6 +160,21 @@ def parse_args() -> argparse.Namespace:
         help="Currency used by CoinGecko for Bitcoin prices. Default: usd.",
     )
     parser.add_argument(
+        "--granularity",
+        choices=["hourly", "daily"],
+        default=DEFAULT_GRANULARITY,
+        help=f"Requested output granularity. Default: {DEFAULT_GRANULARITY}.",
+    )
+    parser.add_argument(
+        "--hourly-chunk-days",
+        type=int,
+        default=MAX_HOURLY_CHUNK_DAYS,
+        help=(
+            "Number of days per CoinGecko request in hourly mode. "
+            f"Default: {MAX_HOURLY_CHUNK_DAYS}."
+        ),
+    )
+    parser.add_argument(
         "--output",
         type=Path,
         default=DEFAULT_OUTPUT_PATH,
@@ -126,7 +185,16 @@ def parse_args() -> argparse.Namespace:
 
 def main() -> None:
     args = parse_args()
-    raw_data = fetch_bitcoin_market_data(args.start_date, args.end_date, args.vs_currency)
+    if args.granularity == "hourly":
+        raw_data = fetch_bitcoin_hourly_market_data(
+            args.start_date,
+            args.end_date,
+            args.vs_currency,
+            args.hourly_chunk_days,
+        )
+    else:
+        raw_data = fetch_bitcoin_market_data(args.start_date, args.end_date, args.vs_currency)
+
     data = build_price_dataframe(raw_data)
     output_path = save_raw_data(data, args.output)
     print(f"Saved {len(data)} rows to {output_path}")
