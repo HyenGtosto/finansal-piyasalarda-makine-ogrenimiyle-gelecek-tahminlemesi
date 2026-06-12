@@ -3,9 +3,12 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import re
+import socket
+import ssl
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
@@ -24,9 +27,23 @@ DEFAULT_PRODUCT = "Latest"
 DEFAULT_TWEETS_PER_DAY = 400
 DEFAULT_CHUNK_HOURS = 4
 DEFAULT_MAX_CALLS_PER_WINDOW = 1
+DEFAULT_MAX_WINDOWS_PER_RUN = 0
+DEFAULT_MAX_DAYS_PER_RUN = 1
+DEFAULT_SAMPLE_WINDOW_MINUTES = 60
+DEFAULT_RANDOM_SEED = 42
 RESULTS_PER_CALL = 20
 GETXAPI_COST_PER_CALL_USD = 0.001
 ENV_FILE_PATH = Path(".env")
+PROGRESS_COLUMNS = [
+    "query",
+    "product",
+    "window_start",
+    "window_end",
+    "tweet_count",
+    "api_calls",
+    "status",
+    "message",
+]
 
 BASE_QUERY = "bitcoin"
 SENTIMENT_QUERY = (
@@ -147,6 +164,30 @@ def build_time_window_query(
     return f"{query} since_time:{start_timestamp} until_time:{end_timestamp}"
 
 
+def choose_sample_window(
+    window_start: datetime,
+    window_end: datetime,
+    sample_window_minutes: int | None,
+    random_seed: int,
+) -> tuple[datetime, datetime]:
+    if sample_window_minutes is None:
+        return window_start, window_end
+
+    full_window_seconds = int((window_end - window_start).total_seconds())
+    sample_window_seconds = sample_window_minutes * 60
+    if sample_window_seconds >= full_window_seconds:
+        return window_start, window_end
+    if sample_window_seconds < 60:
+        raise ValueError("sample_window_minutes must be at least 1")
+
+    key = f"{random_seed}:{window_start.isoformat()}:{window_end.isoformat()}"
+    digest = hashlib.sha256(key.encode("utf-8")).hexdigest()
+    max_offset = full_window_seconds - sample_window_seconds
+    offset_seconds = int(digest[:12], 16) % (max_offset + 1)
+    sample_start = window_start + timedelta(seconds=offset_seconds)
+    return sample_start, sample_start + timedelta(seconds=sample_window_seconds)
+
+
 def iter_time_windows(
     start_date: date,
     end_date: date,
@@ -173,6 +214,39 @@ def tweets_per_window(tweets_per_day: int, chunk_hours: int) -> int:
     if 24 % chunk_hours:
         chunks_per_day += 1
     return max(1, -(-tweets_per_day // chunks_per_day))
+
+
+def select_incomplete_days(
+    windows: list[tuple[date, datetime, datetime]],
+    completed_windows: set[tuple[str, str, str, str]],
+    query: str,
+    product: str,
+    sample_window_minutes: int | None,
+    random_seed: int,
+    max_days: int | None,
+) -> set[date] | None:
+    if max_days is None:
+        return None
+
+    selected_days: list[date] = []
+    selected_set: set[date] = set()
+    for day, window_start, window_end in windows:
+        sample_start, sample_end = choose_sample_window(
+            window_start,
+            window_end,
+            sample_window_minutes,
+            random_seed,
+        )
+        completed_key = window_key(query, product, sample_start, sample_end)
+        if completed_key in completed_windows or day in selected_set:
+            continue
+
+        selected_days.append(day)
+        selected_set.add(day)
+        if len(selected_days) >= max_days:
+            break
+
+    return selected_set
 
 
 def build_query(
@@ -231,9 +305,9 @@ def fetch_tweets_for_query(
                 f"GetXAPI request failed: {exc.code} {message}",
                 FetchResult(tweets=tweets, api_calls=api_calls),
             ) from exc
-        except URLError as exc:
+        except (URLError, TimeoutError, socket.timeout, ssl.SSLError, OSError) as exc:
             raise GetXAPIRequestError(
-                f"Could not connect to GetXAPI: {exc.reason}",
+                f"Could not connect to GetXAPI: {exc}",
                 FetchResult(tweets=tweets, api_calls=api_calls),
             ) from exc
 
@@ -314,22 +388,53 @@ def download_tweets_for_date_range(
     debug: bool = False,
     chunk_hours: int = DEFAULT_CHUNK_HOURS,
     max_calls_per_window: int = DEFAULT_MAX_CALLS_PER_WINDOW,
+    sample_window_minutes: int | None = DEFAULT_SAMPLE_WINDOW_MINUTES,
+    random_seed: int = DEFAULT_RANDOM_SEED,
     overwrite: bool = False,
+    progress_path: Path | None = None,
+    resume: bool = True,
+    max_windows: int | None = DEFAULT_MAX_WINDOWS_PER_RUN,
+    max_days: int | None = DEFAULT_MAX_DAYS_PER_RUN,
 ) -> DownloadSummary:
     total_tweets = 0
     total_calls = 0
     current_day: date | None = None
     current_day_tweets = 0
+    current_day_windows = 0
+    processed_windows = 0
     per_window_limit = tweets_per_window(tweets_per_day, chunk_hours)
+    progress_path = progress_path or default_progress_path(output_path)
+
     if overwrite or not output_path.exists():
         save_raw_data(build_tweet_dataframe([], query, product), output_path)
+    if overwrite or not progress_path.exists():
+        save_progress_data(pd.DataFrame(columns=PROGRESS_COLUMNS), progress_path)
 
-    for day, window_start, window_end in iter_time_windows(start_date, end_date, chunk_hours):
+    completed_windows = set()
+    if resume and not overwrite:
+        completed_windows = load_completed_windows(progress_path, query, product)
+
+    windows = iter_time_windows(start_date, end_date, chunk_hours)
+    target_days = select_incomplete_days(
+        windows,
+        completed_windows,
+        query,
+        product,
+        sample_window_minutes,
+        random_seed,
+        max_days,
+    )
+
+    for day, window_start, window_end in windows:
+        if target_days is not None and day not in target_days:
+            continue
+
         if current_day != day:
-            if current_day is not None:
+            if current_day is not None and current_day_windows:
                 print(f"{current_day.isoformat()}: fetched {current_day_tweets} tweets")
             current_day = day
             current_day_tweets = 0
+            current_day_windows = 0
 
         if max_api_calls is not None and total_calls >= max_api_calls:
             message = f"max API calls reached before {window_start.isoformat()}"
@@ -348,9 +453,21 @@ def download_tweets_for_date_range(
             remaining_calls = min(remaining_calls, max_calls_per_window)
 
         remaining_day_tweets = tweets_per_day - current_day_tweets
+        sample_start, sample_end = choose_sample_window(
+            window_start,
+            window_end,
+            sample_window_minutes,
+            random_seed,
+        )
+        completed_key = window_key(query, product, sample_start, sample_end)
+        if completed_key in completed_windows:
+            if debug:
+                print(f"Skipping completed window {sample_start.isoformat()} to {sample_end.isoformat()}")
+            continue
+
         try:
             daily_result = fetch_tweets_for_query(
-                query=build_time_window_query(query, window_start, window_end),
+                query=build_time_window_query(query, sample_start, sample_end),
                 api_key=api_key,
                 product=product,
                 max_tweets=min(per_window_limit, remaining_day_tweets),
@@ -363,7 +480,18 @@ def download_tweets_for_date_range(
             append_raw_data(partial_data, output_path)
             total_tweets += len(partial_data)
             current_day_tweets += len(partial_data)
-            message = f"{window_start.isoformat()} to {window_end.isoformat()}: {exc}"
+            message = f"{sample_start.isoformat()} to {sample_end.isoformat()}: {exc}"
+            append_progress_row(
+                progress_path,
+                query,
+                product,
+                sample_start,
+                sample_end,
+                len(partial_data),
+                exc.partial_result.api_calls,
+                "failed",
+                str(exc),
+            )
             print(f"Stopped: {message}")
             return DownloadSummary(total_tweets, total_calls, message)
 
@@ -372,13 +500,33 @@ def download_tweets_for_date_range(
         append_raw_data(daily_data, output_path)
         total_tweets += len(daily_data)
         current_day_tweets += len(daily_data)
+        append_progress_row(
+            progress_path,
+            query,
+            product,
+            sample_start,
+            sample_end,
+            len(daily_data),
+            daily_result.api_calls,
+            "completed",
+            "",
+        )
+        processed_windows += 1
+        current_day_windows += 1
         if debug:
             print(
-                f"{window_start.isoformat()} to {window_end.isoformat()}: "
+                f"{sample_start.isoformat()} to {sample_end.isoformat()}: "
                 f"fetched {len(daily_data)} tweets with {daily_result.api_calls} calls"
             )
 
-    if current_day is not None:
+        if max_windows is not None and processed_windows >= max_windows:
+            if current_day is not None:
+                print(f"{current_day.isoformat()}: fetched {current_day_tweets} tweets")
+            message = f"max windows reached after {sample_start.isoformat()} to {sample_end.isoformat()}"
+            print(f"Stopped: {message}")
+            return DownloadSummary(total_tweets, total_calls, message)
+
+    if current_day is not None and current_day_windows:
         print(f"{current_day.isoformat()}: fetched {current_day_tweets} tweets")
     return DownloadSummary(total_tweets, total_calls)
 
@@ -449,6 +597,85 @@ def save_raw_data(data: pd.DataFrame, output_path: Path) -> Path:
     output_path.parent.mkdir(parents=True, exist_ok=True)
     data.to_csv(output_path, index=False)
     return output_path
+
+
+def default_progress_path(output_path: Path) -> Path:
+    return output_path.with_name(f"{output_path.stem}_progress.csv")
+
+
+def window_key(
+    query: str,
+    product: str,
+    window_start: datetime,
+    window_end: datetime,
+) -> tuple[str, str, str, str]:
+    return (
+        query,
+        product,
+        window_start.isoformat(),
+        window_end.isoformat(),
+    )
+
+
+def save_progress_data(data: pd.DataFrame, progress_path: Path) -> Path:
+    progress_path.parent.mkdir(parents=True, exist_ok=True)
+    data.to_csv(progress_path, index=False)
+    return progress_path
+
+
+def append_progress_row(
+    progress_path: Path,
+    query: str,
+    product: str,
+    window_start: datetime,
+    window_end: datetime,
+    tweet_count: int,
+    api_calls: int,
+    status: str,
+    message: str,
+) -> Path:
+    row = pd.DataFrame(
+        [
+            {
+                "query": query,
+                "product": product,
+                "window_start": window_start.isoformat(),
+                "window_end": window_end.isoformat(),
+                "tweet_count": tweet_count,
+                "api_calls": api_calls,
+                "status": status,
+                "message": message,
+            }
+        ],
+        columns=PROGRESS_COLUMNS,
+    )
+    progress_path.parent.mkdir(parents=True, exist_ok=True)
+    should_write_header = not progress_path.exists() or progress_path.stat().st_size == 0
+    row.to_csv(progress_path, mode="a", header=should_write_header, index=False)
+    return progress_path
+
+
+def load_completed_windows(
+    progress_path: Path,
+    query: str,
+    product: str,
+) -> set[tuple[str, str, str, str]]:
+    if not progress_path.exists():
+        return set()
+
+    progress = pd.read_csv(progress_path)
+    if progress.empty:
+        return set()
+
+    progress = progress[
+        (progress["query"] == query)
+        & (progress["product"] == product)
+        & (progress["status"] == "completed")
+    ]
+    return {
+        (row.query, row.product, row.window_start, row.window_end)
+        for row in progress.itertuples(index=False)
+    }
 
 
 def append_raw_data(data: pd.DataFrame, output_path: Path) -> Path:
@@ -540,6 +767,39 @@ def parse_args() -> argparse.Namespace:
         ),
     )
     parser.add_argument(
+        "--max-windows",
+        type=int,
+        default=DEFAULT_MAX_WINDOWS_PER_RUN,
+        help=(
+            "Maximum uncompleted time windows to process per run. "
+            f"Default: {DEFAULT_MAX_WINDOWS_PER_RUN}. Use 0 for no window limit."
+        ),
+    )
+    parser.add_argument(
+        "--max-days",
+        type=int,
+        default=DEFAULT_MAX_DAYS_PER_RUN,
+        help=(
+            "Maximum incomplete days to process per run. "
+            f"Default: {DEFAULT_MAX_DAYS_PER_RUN}. Use 0 to process all remaining days."
+        ),
+    )
+    parser.add_argument(
+        "--sample-window-minutes",
+        type=int,
+        default=DEFAULT_SAMPLE_WINDOW_MINUTES,
+        help=(
+            "Random sub-window size inside each chunk. Use 0 to search the full chunk. "
+            f"Default: {DEFAULT_SAMPLE_WINDOW_MINUTES}."
+        ),
+    )
+    parser.add_argument(
+        "--random-seed",
+        type=int,
+        default=DEFAULT_RANDOM_SEED,
+        help=f"Seed used for deterministic random sub-windows. Default: {DEFAULT_RANDOM_SEED}.",
+    )
+    parser.add_argument(
         "--max-api-calls",
         type=int,
         help="Optional hard cap on GetXAPI calls for budget control.",
@@ -556,9 +816,19 @@ def parse_args() -> argparse.Namespace:
         help=f"CSV output path. Default: {DEFAULT_OUTPUT_PATH}.",
     )
     parser.add_argument(
+        "--progress-output",
+        type=Path,
+        help="Progress CSV path used for resumable runs. Defaults to <output>_progress.csv.",
+    )
+    parser.add_argument(
         "--overwrite",
         action="store_true",
         help="Replace the output CSV before downloading. By default, new rows are appended.",
+    )
+    parser.add_argument(
+        "--no-resume",
+        action="store_true",
+        help="Do not skip windows already marked completed in the progress CSV.",
     )
     return parser.parse_args()
 
@@ -586,7 +856,13 @@ def main() -> None:
         debug=args.debug,
         chunk_hours=args.chunk_hours,
         max_calls_per_window=args.max_calls_per_window,
+        sample_window_minutes=args.sample_window_minutes or None,
+        random_seed=args.random_seed,
         overwrite=args.overwrite,
+        progress_path=args.progress_output,
+        resume=not args.no_resume,
+        max_windows=None if args.max_windows == 0 else args.max_windows,
+        max_days=None if args.max_days == 0 else args.max_days,
     )
     print(
         f"Saved {summary.tweet_count} raw tweets to {args.output}. "
