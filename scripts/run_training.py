@@ -37,7 +37,11 @@ from src.evaluation.evaluate_model import (
     run_ablation,
     run_sentiment_correlation,
 )
-from src.features.sentiment_features import load_daily_sentiment_series, load_4h_sentiment_series
+from src.features.sentiment_features import (
+    load_daily_sentiment_series,
+    load_4h_sentiment_series,
+    load_nvda_weekly_sentiment_series,
+)
 from src.features.technical_indicators import (
     FEATURES_WITH_SENTIMENT,
     build_features,
@@ -56,6 +60,12 @@ SENTIMENT_CSV_MAP: dict[str, str] = {
     "BTC-USD":        "data/processed/bitcoin_daily_sentiment.csv",
     "BTC-USD__4h":    "data/processed/bitcoin_4h_sentiment.csv",
     "ETH-USD":        "data/processed/ethereum_daily_sentiment.csv",
+    "NVDA":           "data/processed/nvidia_weekly_sentiment.csv",
+}
+
+# Symbols that use a custom loader instead of load_daily_sentiment_series
+SENTIMENT_LOADERS: dict[str, object] = {
+    "NVDA": load_nvda_weekly_sentiment_series,
 }
 
 # look_back override for 4H bars: 30 bars = 5 calendar days (6 bars/day)
@@ -126,6 +136,10 @@ def run_symbol(
                     sentiment_series = load_4h_sentiment_series(sentiment_csv)
                     print(f"Loaded 4H sentiment: {len(sentiment_series)} buckets  "
                           f"(mean={sentiment_series.mean():.4f})")
+                elif symbol in SENTIMENT_LOADERS:
+                    sentiment_series = SENTIMENT_LOADERS[symbol](sentiment_csv)
+                    print(f"Loaded {symbol} sentiment: {len(sentiment_series)} periods  "
+                          f"(mean={sentiment_series.mean():.4f})")
                 else:
                     sentiment_series = load_daily_sentiment_series(sentiment_csv)
                     print(f"Loaded sentiment: {len(sentiment_series)} days  "
@@ -153,6 +167,17 @@ def run_symbol(
     # For 4H bars, use a longer look_back (30 bars = 5 calendar days of 6 bars each)
     effective_look_back = LOOK_BACK_4H if interval == "4h" else model_cfg["look_back"]
 
+    # Target column: asset override ("return" -> Next_Return) takes precedence over task default
+    asset_target = asset_ov.get("target")
+    if task == "classification":
+        target_col = "Target_Class"
+    elif asset_target == "return":
+        target_col = "Target_Return"
+    else:
+        target_col = "Next_Close"
+
+    print(f"  Target column: {target_col}")
+
     # ---- 4a. Ablation (3 scenarios) ----
     if ablation:
         results = run_ablation(
@@ -168,6 +193,7 @@ def run_symbol(
             task=task,
             symbol=symbol,
             history_save_path=reports_dir / f"{safe_sym}_history.png",
+            target_col=target_col,
         )
         plot_ablation_comparison(
             results,
@@ -180,14 +206,13 @@ def run_symbol(
         return
 
     # ---- 4b. Single run with full feature set ----
-    target_col = "Target_Class" if task == "classification" else "Next_Close"
     features = [f for f in FEATURES_WITH_SENTIMENT if f in df.columns]
 
     X_tr, y_tr, X_val, y_val, X_te, y_te, scaler, target_scaler = prepare_data(
         df, features, target_col, effective_look_back,
         val_ratio=model_cfg["validation_split"],
         test_ratio=model_cfg["test_split"],
-        scale_target=(task == "regression"),
+        scale_target=(task == "regression" and target_col == "Next_Close"),
     )
 
     model = build_lstm(

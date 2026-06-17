@@ -69,6 +69,7 @@ asset_overrides:
     epochs: 150
     early_stopping_patience: 20
     reduce_lr_patience: 8
+    target: "return"              # predict weekly % change instead of absolute price
   AAPL:
     interval: "1wk"
     look_back: 20

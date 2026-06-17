@@ -47,10 +47,13 @@ def regression_metrics(
     y_true: np.ndarray,
     y_pred: np.ndarray,
 ) -> dict:
-    """Compute MAE, RMSE, MAPE, and R² for regression outputs.
+    """Compute MAE, RMSE, MAPE, R², and direction accuracy for regression outputs.
+
+    Direction accuracy: how often the predicted price movement (up/down)
+    matches the actual movement, using consecutive true prices as the baseline.
 
     Returns:
-        dict with keys: mae, rmse, mape, r2
+        dict with keys: mae, rmse, mape, r2, direction_accuracy
     """
     y_true = np.array(y_true).flatten()
     y_pred = np.array(y_pred).flatten()
@@ -63,7 +66,14 @@ def regression_metrics(
     ss_tot = np.sum((y_true - np.mean(y_true)) ** 2)
     r2 = float(1 - ss_res / ss_tot) if ss_tot != 0 else float("nan")
 
-    return {"mae": mae, "rmse": rmse, "mape": mape, "r2": r2}
+    # Direction accuracy: compare predicted vs actual up/down movement
+    # y_true[i-1] is the previous period's actual close — the baseline for direction
+    actual_dir = np.sign(y_true[1:] - y_true[:-1])
+    pred_dir   = np.sign(y_pred[1:] - y_true[:-1])
+    direction_accuracy = float(np.mean(actual_dir == pred_dir))
+
+    return {"mae": mae, "rmse": rmse, "mape": mape, "r2": r2,
+            "direction_accuracy": direction_accuracy}
 
 
 def sentiment_price_correlation(
@@ -107,7 +117,10 @@ def print_regression_report(metrics: dict, symbol: str = "", scenario: str = "")
     header = f"  [{symbol}] {scenario}" if symbol or scenario else ""
     if header:
         print(header)
-    print(f"    MAE   : {metrics['mae']:.4f}")
-    print(f"    RMSE  : {metrics['rmse']:.4f}")
-    print(f"    MAPE  : {metrics['mape']:.2f}%")
-    print(f"    R²    : {metrics['r2']:.4f}")
+    print(f"    MAE        : {metrics['mae']:.4f}")
+    print(f"    RMSE       : {metrics['rmse']:.4f}")
+    print(f"    MAPE       : {metrics['mape']:.2f}%")
+    print(f"    R2         : {metrics['r2']:.4f}")
+    if "direction_accuracy" in metrics:
+        da = metrics["direction_accuracy"]
+        print(f"    Direction  : {da*100:.1f}%  (up/down correct)")

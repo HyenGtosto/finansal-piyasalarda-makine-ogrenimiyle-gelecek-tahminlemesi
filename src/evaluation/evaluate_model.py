@@ -50,6 +50,7 @@ def run_ablation(
     symbol: str = "",
     verbose: int = 0,
     history_save_path=None,
+    target_col: str | None = None,
 ) -> dict[str, dict]:
     """Train and evaluate the model under all three feature-set scenarios.
 
@@ -59,7 +60,10 @@ def run_ablation(
     if units is None:
         units = [128, 64]
 
-    target_col = "Target_Class" if task == "classification" else "Next_Close"
+    if target_col is None:
+        target_col = "Target_Class" if task == "classification" else "Next_Close"
+    # Returns (Target_Return) are already small (-0.3 to +0.3); only scale absolute prices
+    scale_target = (task == "regression") and (target_col == "Next_Close")
     results: dict[str, dict] = {}
     histories: dict[str, object] = {}
 
@@ -67,7 +71,6 @@ def run_ablation(
         available = [f for f in feature_list if f in df.columns]
         print(f"\n--- [{symbol}] Scenario: {name} ({len(available)} features) ---")
 
-        scale_target = (task == "regression")
         X_tr, y_tr, X_val, y_val, X_te, y_te, _, target_scaler = prepare_data(
             df, available, target_col, look_back, scale_target=scale_target
         )
@@ -114,7 +117,7 @@ def run_ablation(
         m["n_features"] = len(available)
         results[name] = m
 
-    _print_ablation_summary(results, symbol, task)
+    _print_ablation_summary(results, symbol, task, target_col)
 
     if history_save_path is not None:
         plot_ablation_histories(histories, symbol=symbol, task=task,
@@ -164,7 +167,7 @@ def run_sentiment_correlation(
 # Internal helpers
 # ---------------------------------------------------------------------------
 
-def _print_ablation_summary(results: dict, symbol: str, task: str) -> None:
+def _print_ablation_summary(results: dict, symbol: str, task: str, target_col: str = "Next_Close") -> None:
     print(f"\n{'='*60}")
     print(f"  ABLATION SUMMARY  |  {symbol}  |  task={task}")
     print(f"{'='*60}")
@@ -177,7 +180,13 @@ def _print_ablation_summary(results: dict, symbol: str, task: str) -> None:
             flag = " ✓" if acc >= 0.65 else ""
             print(f"  {name:<35} {acc*100:>8.1f}% {f1*100:>7.1f}%{flag}")
         else:
-            mape = m.get("mape", float("nan"))
-            r2   = m.get("r2", float("nan"))
-            print(f"  {name:<35} MAPE={mape:>6.2f}%  R²={r2:>6.4f}")
+            da  = m.get("direction_accuracy", float("nan"))
+            r2  = m.get("r2", float("nan"))
+            mae = m.get("mae", float("nan"))
+            if target_col == "Target_Return":
+                # MAPE is meaningless for near-zero returns; show MAE and direction
+                print(f"  {name:<35} MAE={mae:>8.4f}  R²={r2:>6.4f}  Dir={da*100:>5.1f}%")
+            else:
+                mape = m.get("mape", float("nan"))
+                print(f"  {name:<35} MAPE={mape:>6.2f}%  R²={r2:>6.4f}  Dir={da*100:>5.1f}%")
     print(f"{'='*60}\n")

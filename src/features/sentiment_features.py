@@ -192,7 +192,10 @@ def save_daily_sentiment(
     """Save the daily sentiment aggregation DataFrame to CSV."""
     out = Path(output_path)
     out.parent.mkdir(parents=True, exist_ok=True)
-    daily.to_csv(out)
+    daily = daily.copy()
+    if "tweet_count" in daily.columns:
+        daily["tweet_count"] = daily["tweet_count"].astype(int)
+    daily.to_csv(out, float_format="%.4f")
     print(f"Daily sentiment saved -> {out}  ({len(daily)} days)")
     return out
 
@@ -215,6 +218,52 @@ def load_daily_sentiment_series(
     else:
         raise ValueError(f"No usable sentiment column found in {csv_path}. Columns: {df.columns.tolist()}")
 
+    series.name = "Sentiment"
+    return series
+
+
+# ---------------------------------------------------------------------------
+# NVDA weekly sentiment (from Kaggle finvader daily scores)
+# ---------------------------------------------------------------------------
+
+def process_nvda_weekly_sentiment(
+    raw_csv: str | Path,
+    output_path: str | Path,
+) -> pd.DataFrame:
+    """Aggregate daily finvader scores to weekly and save to processed CSV.
+
+    Reads data/raw/nvidia_stock_sentiment.csv (date, finvader, high, low, adjusted_close).
+    Groups by ISO week (Monday anchor) and takes the mean finvader for the week.
+    Saves to data/processed/nvidia_weekly_sentiment.csv.
+    """
+    df = pd.read_csv(raw_csv, parse_dates=["date"])
+    df = df.sort_values("date")
+
+    # Floor each trading day to the Monday of its week
+    df["week"] = df["date"] - pd.to_timedelta(df["date"].dt.dayofweek, unit="D")
+    df["week"] = df["week"].dt.normalize()
+
+    weekly = df.groupby("week").agg(
+        sentiment_mean=("finvader", "mean"),
+        trading_days=("finvader", "count"),
+    ).reset_index().rename(columns={"week": "date"})
+    weekly = weekly.set_index("date")
+    weekly["trading_days"] = weekly["trading_days"].astype(int)
+
+    out = Path(output_path)
+    out.parent.mkdir(parents=True, exist_ok=True)
+    weekly.to_csv(out, float_format="%.4f")
+    print(f"NVDA weekly sentiment saved -> {out}  ({len(weekly)} weeks)")
+    print(f"Date range: {weekly.index.min().date()} -> {weekly.index.max().date()}")
+    return weekly
+
+
+def load_nvda_weekly_sentiment_series(
+    csv_path: str | Path,
+) -> pd.Series:
+    """Load processed nvidia_weekly_sentiment.csv and return as a pd.Series."""
+    df = pd.read_csv(csv_path, index_col="date", parse_dates=True)
+    series = df["sentiment_mean"]
     series.name = "Sentiment"
     return series
 
@@ -274,7 +323,10 @@ def save_4h_sentiment(agg: pd.DataFrame, output_path: str | Path) -> Path:
     """Save the 4H sentiment aggregation DataFrame to CSV."""
     out = Path(output_path)
     out.parent.mkdir(parents=True, exist_ok=True)
-    agg.to_csv(out)
+    agg = agg.copy()
+    if "tweet_count" in agg.columns:
+        agg["tweet_count"] = agg["tweet_count"].astype(int)
+    agg.to_csv(out, float_format="%.4f")
     print(f"4H sentiment saved -> {out}  ({len(agg)} buckets)")
     return out
 
