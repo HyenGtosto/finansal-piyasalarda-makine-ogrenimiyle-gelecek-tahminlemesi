@@ -20,8 +20,18 @@ Usage examples:
 from __future__ import annotations
 
 import argparse
+import random
 import sys
 from pathlib import Path
+
+import numpy as np
+import tensorflow as tf
+
+# Fix random seeds for reproducible results across runs
+RANDOM_SEED = 42
+random.seed(RANDOM_SEED)
+np.random.seed(RANDOM_SEED)
+tf.random.set_seed(RANDOM_SEED)
 
 # Make project root importable regardless of where the script is called from
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -151,6 +161,17 @@ def run_symbol(
             print(f"[info] No sentiment file yet for {symbol}. "
                   f"Run: python scripts/run_sentiment_pipeline.py {hint}".strip())
 
+    # ---- 2b. Clip price data to sentiment coverage window ----
+    # When sentiment exists, trim price bars to the sentiment end date so the
+    # test set never contains forward-filled (stale) sentiment values.
+    if sentiment_series is not None:
+        sent_end = sentiment_series.index.max()
+        before   = len(df)
+        df = df[df.index <= sent_end]
+        if len(df) < before:
+            print(f"[{symbol}] Price data clipped to sentiment end: "
+                  f"{sent_end.date()}  ({before - len(df)} bars dropped)")
+
     # ---- 3. Feature engineering ----
     df = build_features(
         df,
@@ -193,12 +214,14 @@ def run_symbol(
             task=task,
             symbol=symbol,
             history_save_path=reports_dir / f"{safe_sym}_history.png",
+            importance_save_path=reports_dir / f"{safe_sym}_importance.png",
             target_col=target_col,
         )
         plot_ablation_comparison(
             results,
             symbol=symbol,
             task=task,
+            target_col=target_col,
             save_path=reports_dir / f"{safe_sym}_ablation.png",
         )
         # Sentiment–return correlation (only meaningful once VADER is wired in)

@@ -82,6 +82,7 @@ def plot_ablation_comparison(
     results: dict,
     symbol: str = "",
     task: str = "classification",
+    target_col: str = "Next_Close",
     save_path: str | Path | None = None,
 ) -> None:
     """Bar chart comparing the three ablation scenarios side by side."""
@@ -94,10 +95,16 @@ def plot_ablation_comparison(
         metric_a = [results[n].get("accuracy", 0) * 100 for n in names]
         metric_b = [results[n].get("f1", 0) * 100 for n in names]
         label_a, label_b = "Accuracy %", "F1 %"
+    elif target_col == "Target_Return":
+        # For return prediction: direction accuracy is the key metric
+        metric_a = [results[n].get("direction_accuracy", 0) * 100 for n in names]
+        metric_b = [results[n].get("mae", 0) * 100 for n in names]
+        label_a, label_b = "Direction Accuracy %", "MAE × 100"
     else:
+        # For price prediction: MAPE and direction accuracy
         metric_a = [results[n].get("mape", 0) for n in names]
-        metric_b = [max(0, results[n].get("r2", 0)) * 100 for n in names]
-        label_a, label_b = "MAPE %", "R² × 100"
+        metric_b = [results[n].get("direction_accuracy", 0) * 100 for n in names]
+        label_a, label_b = "MAPE %", "Direction Accuracy %"
 
     x = np.arange(len(names))
     width = 0.35
@@ -106,11 +113,13 @@ def plot_ablation_comparison(
 
     if task == "classification":
         ax.axhline(65, color="red", linestyle="--", alpha=0.7, label="Thesis target 65%")
+    elif target_col == "Target_Return":
+        ax.axhline(50, color="gray", linestyle="--", alpha=0.6, label="Random baseline 50%")
 
     ax.set_title(f"{symbol} — Ablation: Feature Set Comparison", fontsize=13, fontweight="bold")
     ax.set_xticks(x)
     ax.set_xticklabels(short_names[:len(names)])
-    ax.set_ylim(0, 100 if task == "classification" else None)
+    ax.set_ylim(0, 100 if task == "classification" or target_col == "Target_Return" else None)
     ax.legend()
     ax.grid(axis="y", alpha=0.3)
     ax.bar_label(bars_a, fmt="%.1f", padding=3)
@@ -159,6 +168,30 @@ def plot_ablation_histories(
     axes[1].legend(fontsize=8); axes[1].grid(alpha=0.3)
 
     fig.suptitle(f"{symbol} — Training History by Scenario", fontsize=13, fontweight="bold")
+    plt.tight_layout()
+    _save_or_show(save_path)
+
+
+def plot_feature_importance(
+    importance: dict[str, float],
+    symbol: str = "",
+    save_path: str | Path | None = None,
+) -> None:
+    """Horizontal bar chart of permutation feature importance scores."""
+    # Sort by absolute importance, highest at top
+    sorted_items = sorted(importance.items(), key=lambda x: x[1])
+    features = [k for k, _ in sorted_items]
+    scores   = [v for _, v in sorted_items]
+
+    colors = ["#DD8452" if s > 0 else "#d0d0d0" for s in scores]
+
+    fig, ax = plt.subplots(figsize=(10, max(5, len(features) * 0.4)))
+    bars = ax.barh(features, scores, color=colors)
+    ax.axvline(0, color="black", linewidth=0.8)
+    ax.set_xlabel("Direction Accuracy Drop when Feature is Shuffled")
+    ax.set_title(f"{symbol} — Feature Importance (Permutation)", fontsize=13, fontweight="bold")
+    ax.bar_label(bars, fmt="%.3f", padding=3, fontsize=8)
+    ax.grid(axis="x", alpha=0.3)
     plt.tight_layout()
     _save_or_show(save_path)
 
