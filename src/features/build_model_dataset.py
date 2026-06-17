@@ -16,7 +16,30 @@ DEFAULT_WINDOW_HOURS = 4
 SENTIMENT_COLUMNS = ["tweet_id", "created_at", "sentiment_score"]
 OPTIONAL_SENTIMENT_COLUMNS = ["sentiment_label", "engagement_weight"]
 DROP_FINAL_COLUMNS = ["price_points"]
-TARGET_COLUMNS = ["next_price_close", "next_4h_return", "target_up_next_4h"]
+ROUNDING_RULES = {
+    "price_open": 2,
+    "price_high": 2,
+    "price_low": 2,
+    "price_close": 2,
+    "price_mean": 2,
+    "next_price_close": 2,
+    "market_cap_mean": 0,
+    "volume_sum": 0,
+    "price_return": 6,
+    "price_range_pct": 6,
+    "next_4h_return": 6,
+    "tweet_count": 0,
+    "sentiment_mean": 4,
+    "sentiment_min": 4,
+    "sentiment_max": 4,
+    "sentiment_std": 4,
+    "positive_tweet_ratio": 4,
+    "negative_tweet_ratio": 4,
+    "engagement_weight_mean": 4,
+    "engagement_weight_sum": 4,
+    "weighted_sentiment_sum": 4,
+    "weighted_sentiment_mean": 4,
+}
 
 
 def add_window_start(
@@ -115,149 +138,7 @@ def build_sentiment_features(
     features["weighted_sentiment_mean"] = (
         features["weighted_sentiment_sum"] / features["engagement_weight_sum"]
     )
-    features["weighted_sentiment_mean"] = features["weighted_sentiment_mean"].replace(
-        [float("inf"), float("-inf")],
-        0,
-    )
     return features
-
-
-def add_leakage_safe_features(data: pd.DataFrame) -> pd.DataFrame:
-    features = data.sort_values("window_start").reset_index(drop=True).copy()
-
-    features["weighted_sentiment_delta_4h"] = (
-        features["weighted_sentiment_mean"] - features["weighted_sentiment_mean"].shift(1)
-    )
-    features["sentiment_mean_delta_4h"] = (
-        features["sentiment_mean"] - features["sentiment_mean"].shift(1)
-    )
-    features["tweet_count_delta_4h"] = features["tweet_count"] - features["tweet_count"].shift(1)
-    features["engagement_weight_sum_delta_4h"] = (
-        features["engagement_weight_sum"] - features["engagement_weight_sum"].shift(1)
-    )
-
-    add_rolling_features(features)
-    add_zscore_features(features)
-    cleanup_derived_feature_values(features)
-    return features
-
-
-def add_rolling_features(features: pd.DataFrame) -> None:
-    six_windows = 6
-    forty_two_windows = 42
-
-    features["weighted_sentiment_mean_24h"] = (
-        features["weighted_sentiment_mean"].rolling(six_windows, min_periods=1).mean()
-    )
-    features["weighted_sentiment_std_24h"] = (
-        features["weighted_sentiment_mean"].rolling(six_windows, min_periods=2).std()
-    )
-    features["tweet_count_mean_24h"] = (
-        features["tweet_count"].rolling(six_windows, min_periods=1).mean()
-    )
-    features["tweet_count_std_24h"] = (
-        features["tweet_count"].rolling(six_windows, min_periods=2).std()
-    )
-    features["engagement_weight_sum_mean_24h"] = (
-        features["engagement_weight_sum"].rolling(six_windows, min_periods=1).mean()
-    )
-    features["engagement_weight_sum_std_24h"] = (
-        features["engagement_weight_sum"].rolling(six_windows, min_periods=2).std()
-    )
-
-    features["weighted_sentiment_mean_7d"] = (
-        features["weighted_sentiment_mean"].rolling(forty_two_windows, min_periods=1).mean()
-    )
-    features["tweet_count_mean_7d"] = (
-        features["tweet_count"].rolling(forty_two_windows, min_periods=1).mean()
-    )
-    features["engagement_weight_sum_mean_7d"] = (
-        features["engagement_weight_sum"].rolling(forty_two_windows, min_periods=1).mean()
-    )
-    features["price_return_mean_24h"] = (
-        features["price_return"].rolling(six_windows, min_periods=1).mean()
-    )
-    features["price_return_std_24h"] = (
-        features["price_return"].rolling(six_windows, min_periods=2).std()
-    )
-    features["volume_sum_mean_24h"] = (
-        features["volume_sum"].rolling(six_windows, min_periods=1).mean()
-    )
-    features["_volume_sum_std_24h"] = (
-        features["volume_sum"].rolling(six_windows, min_periods=2).std()
-    )
-
-
-def add_zscore_features(features: pd.DataFrame) -> None:
-    features["tweet_count_zscore_24h"] = (
-        features["tweet_count"] - features["tweet_count_mean_24h"]
-    ) / features["tweet_count_std_24h"]
-    features["engagement_weight_sum_zscore_24h"] = (
-        features["engagement_weight_sum"] - features["engagement_weight_sum_mean_24h"]
-    ) / features["engagement_weight_sum_std_24h"]
-    features["weighted_sentiment_zscore_24h"] = (
-        features["weighted_sentiment_mean"] - features["weighted_sentiment_mean_24h"]
-    ) / features["weighted_sentiment_std_24h"]
-    features["volume_sum_zscore_24h"] = (
-        features["volume_sum"] - features["volume_sum_mean_24h"]
-    ) / features["_volume_sum_std_24h"]
-    features.drop(columns=["_volume_sum_std_24h"], inplace=True)
-
-
-def cleanup_derived_feature_values(features: pd.DataFrame) -> None:
-    derived_columns = [
-        "weighted_sentiment_delta_4h",
-        "sentiment_mean_delta_4h",
-        "tweet_count_delta_4h",
-        "engagement_weight_sum_delta_4h",
-        "weighted_sentiment_std_24h",
-        "tweet_count_std_24h",
-        "engagement_weight_sum_std_24h",
-        "price_return_std_24h",
-        "tweet_count_zscore_24h",
-        "engagement_weight_sum_zscore_24h",
-        "weighted_sentiment_zscore_24h",
-        "volume_sum_zscore_24h",
-    ]
-    existing_columns = [column for column in derived_columns if column in features.columns]
-    features[existing_columns] = (
-        features[existing_columns]
-        .replace([float("inf"), float("-inf")], 0)
-        .fillna(0)
-    )
-
-
-def get_model_feature_columns(data: pd.DataFrame) -> list[str]:
-    excluded_columns = set(TARGET_COLUMNS + ["window_start"])
-    return [column for column in data.columns if column not in excluded_columns]
-
-
-def validate_final_dataset(data: pd.DataFrame) -> None:
-    if not data["window_start"].is_monotonic_increasing:
-        raise ValueError("window_start must be sorted ascending")
-    if data["window_start"].duplicated().any():
-        raise ValueError("window_start contains duplicate values")
-
-    feature_columns = get_model_feature_columns(data)
-    leaked_targets = sorted(set(feature_columns).intersection(TARGET_COLUMNS))
-    if leaked_targets:
-        raise ValueError(f"Target columns are present in feature columns: {leaked_targets}")
-
-    numeric_data = data.select_dtypes(include="number")
-    if numeric_data.isin([float("inf"), float("-inf")]).any().any():
-        raise ValueError("Dataset contains infinite values")
-    if data.isna().any().any():
-        missing_counts = data.isna().sum()
-        missing_counts = missing_counts[missing_counts > 0].to_dict()
-        raise ValueError(f"Dataset contains NaN values: {missing_counts}")
-
-    class_balance = data["target_up_next_4h"].value_counts(normalize=True).sort_index()
-    print("Final dataset validation")
-    print(f"Rows: {len(data)}")
-    print(f"Date range: {data['window_start'].iloc[0]} to {data['window_start'].iloc[-1]}")
-    print("target_up_next_4h class balance:")
-    for target_class, ratio in class_balance.items():
-        print(f"  {target_class}: {ratio:.4f}")
 
 
 def build_final_dataset(
@@ -290,14 +171,24 @@ def build_final_dataset(
     ]
     final[fill_zero_columns] = final[fill_zero_columns].fillna(0)
     final = final.dropna(subset=["next_price_close", "next_4h_return"])
-    final = add_leakage_safe_features(final)
-    final = final.drop(columns=[column for column in DROP_FINAL_COLUMNS if column in final.columns])
     final["window_start"] = final["window_start"].dt.strftime("%Y-%m-%dT%H:%M:%SZ")
-    validate_final_dataset(final)
+    final = final.drop(columns=[column for column in DROP_FINAL_COLUMNS if column in final.columns])
+    final = round_final_dataset(final)
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
     final.to_csv(output_path, index=False)
     return output_path
+
+
+def round_final_dataset(data: pd.DataFrame) -> pd.DataFrame:
+    rounded = data.copy()
+    for column, decimals in ROUNDING_RULES.items():
+        if column in rounded.columns:
+            rounded[column] = pd.to_numeric(rounded[column], errors="coerce").round(decimals)
+
+    if "tweet_count" in rounded.columns:
+        rounded["tweet_count"] = rounded["tweet_count"].astype(int)
+    return rounded
 
 
 def parse_args() -> argparse.Namespace:

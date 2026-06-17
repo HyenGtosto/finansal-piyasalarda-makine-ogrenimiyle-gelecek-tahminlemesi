@@ -1,6 +1,34 @@
-# Proje bağımlılıklarını buraya ekleyin
+# Core data & ML
 numpy
 pandas
 scikit-learn
+scipy
+
+# Deep learning
+tensorflow>=2.12
+
+# Financial data
+yfinance
+
+# Technical indicators (we compute manually, but useful as backup)
+pandas-ta
+
+# Sentiment analysis
+vaderSentiment
+nltk
+
+# Plotting
 matplotlib
 seaborn
+plotly
+kaleido
+
+# Config parsing
+pyyaml
+
+# Existing tweet / price pipeline dependencies
+requests
+tweepy
+
+# Optional: Alpaca (alternative to yfinance for stock data)
+alpaca-py

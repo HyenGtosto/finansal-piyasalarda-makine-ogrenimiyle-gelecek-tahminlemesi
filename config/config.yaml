@@ -1,0 +1,98 @@
+# =============================================================================
+# Finansal Piyasalarda Makine Öğrenimiyle Gelecek Tahminlemesi — Config
+# =============================================================================
+
+# Assets to analyse. Add or remove symbols freely.
+# Stocks: plain ticker (NVDA, AAPL). Crypto: yfinance format (BTC-USD, ETH-USD).
+assets:
+  - symbol: BTC-USD
+    type: crypto
+    name: Bitcoin
+  - symbol: ETH-USD
+    type: crypto
+    name: Ethereum
+  - symbol: NVDA
+    type: stock
+    name: NVIDIA
+  - symbol: AAPL
+    type: stock
+    name: Apple
+
+# Historical data range applied to all assets via yfinance
+data:
+  start_date: "2018-01-01"     # extended for more stock history (~7 years weekly for NVDA/AAPL)
+  end_date: "2025-06-15"
+  interval: "1d"               # daily bars; "1wk" for weekly
+
+# LSTM model hyperparameters (defaults — applied to all assets unless overridden below)
+model:
+  look_back: 10                # sliding window length in bars
+  lstm_units: [64, 32]         # units per stacked LSTM layer
+  dropout: 0.2
+  learning_rate: 0.001
+  batch_size: 16
+  epochs: 100
+  early_stopping_patience: 15
+  reduce_lr_patience: 7
+  test_split: 0.15
+  validation_split: 0.15
+
+# Per-asset overrides: any key here takes precedence over the model defaults above.
+# BTC-USD uses only 366 days of aligned data -> ~218 training sequences.
+# A large LSTM overfits immediately (best epoch = 1). Use a single small LSTM layer.
+asset_overrides:
+  # Crypto: only 366 aligned days -> small model to avoid immediate overfitting
+  BTC-USD:
+    look_back: 5
+    lstm_units: [16]
+    dropout: 0.05
+    batch_size: 8
+    epochs: 200
+    early_stopping_patience: 40
+    reduce_lr_patience: 15
+  ETH-USD:
+    look_back: 5
+    lstm_units: [16]
+    dropout: 0.05
+    batch_size: 8
+    epochs: 200
+    early_stopping_patience: 40
+    reduce_lr_patience: 15
+  # Stocks: use weekly bars (1wk) to reduce noise; prediction5.py got 66% this way.
+  # Pass --interval 1wk when running NVDA/AAPL to activate these parameters.
+  NVDA:
+    interval: "1wk"
+    look_back: 20
+    lstm_units: [64, 32]
+    dropout: 0.2
+    batch_size: 8
+    epochs: 150
+    early_stopping_patience: 20
+    reduce_lr_patience: 8
+  AAPL:
+    interval: "1wk"
+    look_back: 20
+    lstm_units: [64, 32]
+    dropout: 0.2
+    batch_size: 8
+    epochs: 150
+    early_stopping_patience: 20
+    reduce_lr_patience: 8
+
+# Technical indicator parameters
+indicators:
+  sma_windows: [5, 20, 50]
+  ema_windows: [12, 20, 26]
+  rsi_window: 14
+  macd_fast: 12
+  macd_slow: 26
+  macd_signal: 9
+  bollinger_window: 20
+  bollinger_std: 2.0
+
+# File system paths (relative to project root)
+paths:
+  raw_data: data/raw
+  processed_data: data/processed
+  models: data/models
+  reports: reports/figures
