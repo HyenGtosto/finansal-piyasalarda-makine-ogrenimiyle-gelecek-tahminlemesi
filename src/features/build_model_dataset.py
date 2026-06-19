@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 from pathlib import Path
 
+import numpy as np
 import pandas as pd
 
 
@@ -16,6 +17,8 @@ DEFAULT_WINDOW_HOURS = 4
 SENTIMENT_COLUMNS = ["tweet_id", "created_at", "sentiment_score"]
 OPTIONAL_SENTIMENT_COLUMNS = ["sentiment_label", "engagement_weight"]
 DROP_FINAL_COLUMNS = ["price_points"]
+TARGET_COLUMNS = {"next_price_close", "next_4h_return", "target_up_next_4h"}
+TIME_COLUMN = "window_start"
 ROUNDING_RULES = {
     "price_open": 2,
     "price_high": 2,
@@ -141,6 +144,122 @@ def build_sentiment_features(
     return features
 
 
+def add_leakage_safe_features(data: pd.DataFrame) -> pd.DataFrame:
+    """Add historical features using only current and previous rows."""
+    featured = data.copy()
+    featured = featured.sort_values(TIME_COLUMN).reset_index(drop=True)
+
+    featured["weighted_sentiment_delta_4h"] = (
+        featured["weighted_sentiment_mean"] - featured["weighted_sentiment_mean"].shift(1)
+    )
+    featured["sentiment_mean_delta_4h"] = (
+        featured["sentiment_mean"] - featured["sentiment_mean"].shift(1)
+    )
+    featured["tweet_count_delta_4h"] = featured["tweet_count"] - featured["tweet_count"].shift(1)
+    featured["engagement_weight_sum_delta_4h"] = (
+        featured["engagement_weight_sum"] - featured["engagement_weight_sum"].shift(1)
+    )
+
+    mean_24h_columns = {
+        "weighted_sentiment_mean": "weighted_sentiment_mean_24h",
+        "tweet_count": "tweet_count_mean_24h",
+        "engagement_weight_sum": "engagement_weight_sum_mean_24h",
+        "price_return": "price_return_mean_24h",
+        "volume_sum": "volume_sum_mean_24h",
+    }
+    for source_column, output_column in mean_24h_columns.items():
+        featured[output_column] = featured[source_column].rolling(window=6, min_periods=1).mean()
+
+    std_24h_columns = {
+        "weighted_sentiment_mean": "weighted_sentiment_std_24h",
+        "tweet_count": "tweet_count_std_24h",
+        "engagement_weight_sum": "engagement_weight_sum_std_24h",
+        "price_return": "price_return_std_24h",
+        "volume_sum": "volume_sum_std_24h",
+    }
+    for source_column, output_column in std_24h_columns.items():
+        featured[output_column] = featured[source_column].rolling(window=6, min_periods=2).std()
+
+    featured["tweet_count_zscore_24h"] = (
+        (featured["tweet_count"] - featured["tweet_count_mean_24h"])
+        / featured["tweet_count_std_24h"]
+    )
+    featured["engagement_weight_sum_zscore_24h"] = (
+        (featured["engagement_weight_sum"] - featured["engagement_weight_sum_mean_24h"])
+        / featured["engagement_weight_sum_std_24h"]
+    )
+    featured["weighted_sentiment_zscore_24h"] = (
+        (featured["weighted_sentiment_mean"] - featured["weighted_sentiment_mean_24h"])
+        / featured["weighted_sentiment_std_24h"]
+    )
+    featured["volume_sum_zscore_24h"] = (
+        (featured["volume_sum"] - featured["volume_sum_mean_24h"])
+        / featured["volume_sum_std_24h"]
+    )
+
+    featured["weighted_sentiment_mean_7d"] = (
+        featured["weighted_sentiment_mean"].rolling(window=42, min_periods=1).mean()
+    )
+    featured["tweet_count_mean_7d"] = (
+        featured["tweet_count"].rolling(window=42, min_periods=1).mean()
+    )
+    featured["engagement_weight_sum_mean_7d"] = (
+        featured["engagement_weight_sum"].rolling(window=42, min_periods=1).mean()
+    )
+
+    cleanup_columns = [
+        "weighted_sentiment_delta_4h",
+        "sentiment_mean_delta_4h",
+        "tweet_count_delta_4h",
+        "engagement_weight_sum_delta_4h",
+        "weighted_sentiment_std_24h",
+        "tweet_count_std_24h",
+        "engagement_weight_sum_std_24h",
+        "price_return_std_24h",
+        "volume_sum_std_24h",
+        "tweet_count_zscore_24h",
+        "engagement_weight_sum_zscore_24h",
+        "weighted_sentiment_zscore_24h",
+        "volume_sum_zscore_24h",
+    ]
+    featured[cleanup_columns] = (
+        featured[cleanup_columns].replace([np.inf, -np.inf], 0).fillna(0)
+    )
+    return featured
+
+
+def get_model_feature_columns(data: pd.DataFrame) -> list[str]:
+    excluded_columns = TARGET_COLUMNS.union({TIME_COLUMN})
+    return [
+        column
+        for column in data.columns
+        if column not in excluded_columns and pd.api.types.is_numeric_dtype(data[column])
+    ]
+
+
+def validate_final_dataset(data: pd.DataFrame) -> None:
+    if not data[TIME_COLUMN].is_monotonic_increasing:
+        raise ValueError("window_start must be sorted ascending")
+    if data[TIME_COLUMN].duplicated().any():
+        raise ValueError("window_start contains duplicate values")
+
+    feature_columns = get_model_feature_columns(data)
+    leaked_targets = sorted(set(feature_columns).intersection(TARGET_COLUMNS))
+    if leaked_targets:
+        raise ValueError(f"Target columns cannot be used as features: {leaked_targets}")
+
+    numeric = data.select_dtypes(include=["number"])
+    if np.isinf(numeric.to_numpy()).any():
+        raise ValueError("Output dataset contains infinite values")
+    if data.isna().any().any():
+        raise ValueError("Output dataset contains NaN values")
+
+    class_balance = data["target_up_next_4h"].value_counts(normalize=True).sort_index().to_dict()
+    print(f"Rows: {len(data)}")
+    print(f"Date range: {data[TIME_COLUMN].min()} to {data[TIME_COLUMN].max()}")
+    print(f"target_up_next_4h balance: {class_balance}")
+
+
 def build_final_dataset(
     price_input_path: Path,
     sentiment_input_path: Path,
@@ -170,10 +289,12 @@ def build_final_dataset(
         "weighted_sentiment_mean",
     ]
     final[fill_zero_columns] = final[fill_zero_columns].fillna(0)
+    final = add_leakage_safe_features(final)
     final = final.dropna(subset=["next_price_close", "next_4h_return"])
     final["window_start"] = final["window_start"].dt.strftime("%Y-%m-%dT%H:%M:%SZ")
     final = final.drop(columns=[column for column in DROP_FINAL_COLUMNS if column in final.columns])
     final = round_final_dataset(final)
+    validate_final_dataset(final)
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
     final.to_csv(output_path, index=False)
