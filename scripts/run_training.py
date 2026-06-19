@@ -51,6 +51,8 @@ from src.features.sentiment_features import (
     load_daily_sentiment_series,
     load_4h_sentiment_series,
     load_nvda_weekly_sentiment_series,
+    load_aapl_weekly_sentiment_series,
+    load_eth_daily_sentiment_series,
 )
 from src.features.technical_indicators import (
     FEATURES_WITH_SENTIMENT,
@@ -69,13 +71,16 @@ from src.visualization.plot_results import (
 SENTIMENT_CSV_MAP: dict[str, str] = {
     "BTC-USD":        "data/processed/bitcoin_daily_sentiment.csv",
     "BTC-USD__4h":    "data/processed/bitcoin_4h_sentiment.csv",
-    "ETH-USD":        "data/processed/ethereum_daily_sentiment.csv",
+    "ETH-USD":        "data/processed/eth_daily_sentiment.csv",
     "NVDA":           "data/processed/nvidia_weekly_sentiment.csv",
+    "AAPL":           "data/processed/aapl_weekly_sentiment.csv",
 }
 
 # Symbols that use a custom loader instead of load_daily_sentiment_series
 SENTIMENT_LOADERS: dict[str, object] = {
     "NVDA": load_nvda_weekly_sentiment_series,
+    "AAPL": load_aapl_weekly_sentiment_series,
+    "ETH-USD": load_eth_daily_sentiment_series,
 }
 
 # look_back override for 4H bars: 30 bars = 5 calendar days (6 bars/day)
@@ -161,16 +166,17 @@ def run_symbol(
             print(f"[info] No sentiment file yet for {symbol}. "
                   f"Run: python scripts/run_sentiment_pipeline.py {hint}".strip())
 
-    # ---- 2b. Clip price data to sentiment coverage window ----
-    # When sentiment exists, trim price bars to the sentiment end date so the
-    # test set never contains forward-filled (stale) sentiment values.
+    # ---- 2b. Clip price data to the intersection of price and sentiment windows ----
+    # Trim both ends so every bar in the training set has real sentiment coverage.
     if sentiment_series is not None:
-        sent_end = sentiment_series.index.max()
-        before   = len(df)
-        df = df[df.index <= sent_end]
-        if len(df) < before:
-            print(f"[{symbol}] Price data clipped to sentiment end: "
-                  f"{sent_end.date()}  ({before - len(df)} bars dropped)")
+        sent_start = sentiment_series.index.min()
+        sent_end   = sentiment_series.index.max()
+        before     = len(df)
+        df = df[(df.index >= sent_start) & (df.index <= sent_end)]
+        clipped = before - len(df)
+        if clipped > 0:
+            print(f"[{symbol}] Price clipped to sentiment window: "
+                  f"{sent_start.date()} -> {sent_end.date()}  ({clipped} bars dropped)")
 
     # ---- 3. Feature engineering ----
     df = build_features(
@@ -214,7 +220,6 @@ def run_symbol(
             task=task,
             symbol=symbol,
             history_save_path=reports_dir / f"{safe_sym}_history.png",
-            importance_save_path=reports_dir / f"{safe_sym}_importance.png",
             target_col=target_col,
         )
         plot_ablation_comparison(
@@ -226,7 +231,7 @@ def run_symbol(
         )
         # Sentiment–return correlation (only meaningful once VADER is wired in)
         run_sentiment_correlation(df, symbol=symbol)
-        return
+        return results
 
     # ---- 4b. Single run with full feature set ----
     features = [f for f in FEATURES_WITH_SENTIMENT if f in df.columns]

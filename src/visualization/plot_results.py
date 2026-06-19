@@ -89,12 +89,12 @@ def plot_ablation_comparison(
     names = list(results.keys())
     short_names = ["Price\nOnly", "Price +\nTechnical", "Price + Tech\n+ Sentiment"]
 
-    fig, ax = plt.subplots(figsize=(11, 6))
+    fig, ax = plt.subplots(figsize=(9.6, 5.4))
 
     if task == "classification":
         metric_a = [results[n].get("accuracy", 0) * 100 for n in names]
         metric_b = [results[n].get("f1", 0) * 100 for n in names]
-        label_a, label_b = "Accuracy %", "F1 %"
+        label_a, label_b = "Direction Accuracy %", "F1 %"
     elif target_col == "Target_Return":
         # For return prediction: direction accuracy is the key metric
         metric_a = [results[n].get("direction_accuracy", 0) * 100 for n in names]
@@ -112,6 +112,7 @@ def plot_ablation_comparison(
     bars_b = ax.bar(x + width / 2, metric_b, width, label=label_b, color="#DD8452")
 
     if task == "classification":
+        ax.axhline(50, color="gray", linestyle="--", alpha=0.6, label="Random baseline 50%")
         ax.axhline(65, color="red", linestyle="--", alpha=0.7, label="Thesis target 65%")
     elif target_col == "Target_Return":
         ax.axhline(50, color="gray", linestyle="--", alpha=0.6, label="Random baseline 50%")
@@ -125,7 +126,7 @@ def plot_ablation_comparison(
     ax.bar_label(bars_a, fmt="%.1f", padding=3)
     ax.bar_label(bars_b, fmt="%.1f", padding=3)
 
-    plt.tight_layout()
+    plt.tight_layout(rect=[0, 0.04, 1, 0.96])
     _save_or_show(save_path)
 
 
@@ -145,54 +146,42 @@ def plot_ablation_histories(
     metric = "mae" if task == "regression" else "accuracy"
     metric_label = "MAE" if task == "regression" else "Accuracy"
 
-    fig, axes = plt.subplots(1, 2, figsize=(15, 5))
+    fig, axes = plt.subplots(1, 2, figsize=(9.6, 5.4))
 
     for idx, (name, history) in enumerate(histories.items()):
         color = colors[idx % len(colors)]
         label = scenario_labels.get(name, name)
         h = history.history
 
-        axes[0].plot(h["loss"],     color=color, linewidth=1.5, label=f"{label} – train")
-        axes[0].plot(h["val_loss"], color=color, linewidth=1.0, linestyle="--", alpha=0.7, label=f"{label} – val")
+        axes[0].plot(h["loss"],     color=color, linewidth=1.5, label=f"{label} — train")
+        axes[0].plot(h["val_loss"], color=color, linewidth=1.0, linestyle="--", alpha=0.6, label=f"{label} — val")
 
         if metric in h:
-            axes[1].plot(h[metric],           color=color, linewidth=1.5, label=f"{label} – train")
-            axes[1].plot(h[f"val_{metric}"],  color=color, linewidth=1.0, linestyle="--", alpha=0.7, label=f"{label} – val")
+            axes[1].plot(h[metric],          color=color, linewidth=1.5)
+            axes[1].plot(h[f"val_{metric}"], color=color, linewidth=1.0, linestyle="--", alpha=0.6)
 
-    axes[0].set_title("Loss (MSE)" if task == "regression" else "Loss (BCE)")
+    axes[0].set_title("Loss (MSE)" if task == "regression" else "Loss (BCE)", fontsize=11)
     axes[0].set_xlabel("Epoch"); axes[0].set_ylabel("Loss")
-    axes[0].legend(fontsize=8); axes[0].grid(alpha=0.3)
+    axes[0].grid(alpha=0.3)
 
-    axes[1].set_title(metric_label)
+    axes[1].set_title(metric_label, fontsize=11)
     axes[1].set_xlabel("Epoch"); axes[1].set_ylabel(metric_label)
-    axes[1].legend(fontsize=8); axes[1].grid(alpha=0.3)
+    axes[1].grid(alpha=0.3)
+
+    # Single shared legend below both subplots — 3 columns (one per scenario)
+    handles, labels = axes[0].get_legend_handles_labels()
+    fig.legend(
+        handles, labels,
+        loc="lower center",
+        ncol=3,
+        fontsize=8,
+        framealpha=0.8,
+        bbox_to_anchor=(0.5, 0.01),
+    )
 
     fig.suptitle(f"{symbol} — Training History by Scenario", fontsize=13, fontweight="bold")
-    plt.tight_layout()
-    _save_or_show(save_path)
-
-
-def plot_feature_importance(
-    importance: dict[str, float],
-    symbol: str = "",
-    save_path: str | Path | None = None,
-) -> None:
-    """Horizontal bar chart of permutation feature importance scores."""
-    # Sort by absolute importance, highest at top
-    sorted_items = sorted(importance.items(), key=lambda x: x[1])
-    features = [k for k, _ in sorted_items]
-    scores   = [v for _, v in sorted_items]
-
-    colors = ["#DD8452" if s > 0 else "#d0d0d0" for s in scores]
-
-    fig, ax = plt.subplots(figsize=(10, max(5, len(features) * 0.4)))
-    bars = ax.barh(features, scores, color=colors)
-    ax.axvline(0, color="black", linewidth=0.8)
-    ax.set_xlabel("Direction Accuracy Drop when Feature is Shuffled")
-    ax.set_title(f"{symbol} — Feature Importance (Permutation)", fontsize=13, fontweight="bold")
-    ax.bar_label(bars, fmt="%.3f", padding=3, fontsize=8)
-    ax.grid(axis="x", alpha=0.3)
-    plt.tight_layout()
+    # rect=[left, bottom, right, top] — reserve space at bottom for legend, top for suptitle
+    plt.tight_layout(rect=[0, 0.18, 1, 0.95])
     _save_or_show(save_path)
 
 
@@ -226,7 +215,7 @@ def _save_or_show(save_path: str | Path | None) -> None:
     if save_path is not None:
         path = Path(save_path)
         path.parent.mkdir(parents=True, exist_ok=True)
-        plt.savefig(path, dpi=150, bbox_inches="tight")
+        plt.savefig(path, dpi=150)
         print(f"Chart saved -> {path}")
     plt.show()
     plt.close()

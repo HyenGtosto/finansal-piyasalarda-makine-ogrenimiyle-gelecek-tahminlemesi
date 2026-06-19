@@ -269,6 +269,78 @@ def load_nvda_weekly_sentiment_series(
 
 
 # ---------------------------------------------------------------------------
+# AAPL weekly sentiment (from financial news sentiment_polarity scores)
+# ---------------------------------------------------------------------------
+
+def process_aapl_weekly_sentiment(
+    raw_csv: str | Path,
+    output_path: str | Path,
+) -> pd.DataFrame:
+    """Aggregate daily AAPL news sentiment_polarity to weekly and save."""
+    df = pd.read_csv(raw_csv)
+    df["date"] = pd.to_datetime(df["date"], utc=True).dt.tz_localize(None)
+    df = df.sort_values("date")
+
+    df["week"] = (df["date"] - pd.to_timedelta(df["date"].dt.dayofweek, unit="D")).dt.normalize()
+
+    weekly = df.groupby("week").agg(
+        sentiment_mean=("sentiment_polarity", "mean"),
+        article_count=("sentiment_polarity", "count"),
+    )
+    weekly["article_count"] = weekly["article_count"].astype(int)
+    weekly.index.name = "date"
+
+    out = Path(output_path)
+    out.parent.mkdir(parents=True, exist_ok=True)
+    weekly.to_csv(out, float_format="%.4f")
+    print(f"AAPL weekly sentiment saved -> {out}  ({len(weekly)} weeks)")
+    print(f"Date range: {weekly.index.min().date()} -> {weekly.index.max().date()}")
+    return weekly
+
+
+def load_aapl_weekly_sentiment_series(csv_path: str | Path) -> pd.Series:
+    """Load processed aapl_weekly_sentiment.csv and return as a pd.Series."""
+    df = pd.read_csv(csv_path, index_col="date", parse_dates=True)
+    series = df["sentiment_mean"]
+    series.name = "Sentiment"
+    return series
+
+
+# ---------------------------------------------------------------------------
+# ETH daily sentiment (from eth_df.csv normalized scores)
+# ---------------------------------------------------------------------------
+
+def process_eth_daily_sentiment(
+    raw_csv: str | Path,
+    output_path: str | Path,
+) -> pd.DataFrame:
+    """Process sparse ETH daily sentiment (normalized column) and save."""
+    df = pd.read_csv(raw_csv)
+    df["date"] = pd.to_datetime(df["date"]).dt.normalize()
+    df = df.sort_values("date").drop_duplicates("date")
+    df = df.set_index("date")[["normalized", "count"]].rename(
+        columns={"normalized": "sentiment_mean", "count": "tweet_count"}
+    )
+    df["tweet_count"] = df["tweet_count"].astype(int)
+    df.index.name = "date"
+
+    out = Path(output_path)
+    out.parent.mkdir(parents=True, exist_ok=True)
+    df.to_csv(out, float_format="%.4f")
+    print(f"ETH daily sentiment saved -> {out}  ({len(df)} days)")
+    print(f"Date range: {df.index.min().date()} -> {df.index.max().date()}")
+    return df
+
+
+def load_eth_daily_sentiment_series(csv_path: str | Path) -> pd.Series:
+    """Load processed eth_daily_sentiment.csv and return as a pd.Series."""
+    df = pd.read_csv(csv_path, index_col="date", parse_dates=True)
+    series = df["sentiment_mean"]
+    series.name = "Sentiment"
+    return series
+
+
+# ---------------------------------------------------------------------------
 # 4-hour sentiment aggregation
 # ---------------------------------------------------------------------------
 

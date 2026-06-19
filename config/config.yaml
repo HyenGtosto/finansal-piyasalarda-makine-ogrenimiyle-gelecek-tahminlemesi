@@ -43,6 +43,7 @@ model:
 asset_overrides:
   # Crypto: only 366 aligned days -> small model to avoid immediate overfitting
   BTC-USD:
+    interval: "4h"
     look_back: 5
     lstm_units: [16]
     dropout: 0.05
@@ -79,6 +80,7 @@ asset_overrides:
     epochs: 150
     early_stopping_patience: 20
     reduce_lr_patience: 8
+    target: "return"
 
 # Technical indicator parameters
 indicators:
