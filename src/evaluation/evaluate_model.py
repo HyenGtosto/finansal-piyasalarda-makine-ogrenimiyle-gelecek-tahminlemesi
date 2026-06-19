@@ -25,7 +25,7 @@ from src.features.technical_indicators import (
 )
 from src.models.lstm_model import build_lstm, prepare_data
 from src.models.train_model import train
-from src.visualization.plot_results import plot_ablation_histories
+from src.visualization.plot_results import plot_ablation_histories, plot_feature_importance
 
 
 # Feature sets for the three ablation scenarios
@@ -51,6 +51,7 @@ def run_ablation(
     verbose: int = 0,
     history_save_path=None,
     target_col: str | None = None,
+    importance_save_path=None,
 ) -> dict[str, dict]:
     """Train and evaluate the model under all three feature-set scenarios.
 
@@ -115,6 +116,9 @@ def run_ablation(
 
         m["features_used"] = available
         m["n_features"] = len(available)
+        m["model"] = model
+        m["X_te"]  = X_te
+        m["y_te"]  = y_te
         results[name] = m
 
     _print_ablation_summary(results, symbol, task, target_col)
@@ -123,7 +127,67 @@ def run_ablation(
         plot_ablation_histories(histories, symbol=symbol, task=task,
                                 save_path=history_save_path)
 
+    if importance_save_path is not None and task == "regression":
+        # Run permutation importance on the richest scenario (price_technical_sentiment)
+        best_scenario = "price_technical_sentiment"
+        if best_scenario in results and "model" in results[best_scenario]:
+            imp_model    = results[best_scenario]["model"]
+            imp_X        = results[best_scenario]["X_te"]
+            imp_y        = results[best_scenario]["y_te"]
+            imp_features = results[best_scenario]["features_used"]
+            print(f"\n[{symbol}] Computing permutation feature importance...")
+            importance = compute_permutation_importance(
+                imp_model, imp_X, imp_y, imp_features, target_col=target_col
+            )
+            plot_feature_importance(
+                importance, symbol=symbol, save_path=importance_save_path
+            )
+
     return results
+
+
+def compute_permutation_importance(
+    model,
+    X_test: np.ndarray,
+    y_test: np.ndarray,
+    feature_names: list[str],
+    target_col: str = "Next_Close",
+    n_repeats: int = 5,
+) -> dict[str, float]:
+    """Measure each feature's importance by shuffling it and recording accuracy drop.
+
+    Shuffles one feature at a time across all test samples, runs prediction,
+    computes direction accuracy, and compares to the baseline. Repeats n_repeats
+    times per feature and averages to reduce randomness.
+
+    Returns a dict mapping feature_name -> importance score (baseline_acc - shuffled_acc).
+    Positive = feature helped; near zero = feature didn't matter.
+    """
+    y_pred_base = model.predict(X_test, verbose=0).flatten()
+    y_ref = y_test[:-1]
+    y_true_dir = np.sign(y_test[1:] - y_ref)
+    pred_dir    = np.sign(y_pred_base[1:] - y_ref)
+    baseline_acc = float(np.mean(y_true_dir == pred_dir))
+
+    importance: dict[str, float] = {}
+    rng = np.random.default_rng(42)
+
+    for feat_idx, feat_name in enumerate(feature_names):
+        drops = []
+        for _ in range(n_repeats):
+            X_shuffled = X_test.copy()
+            # Shuffle this feature's values across all samples (break its signal)
+            perm = rng.permutation(X_shuffled.shape[0])
+            X_shuffled[:, :, feat_idx] = X_shuffled[perm, :, feat_idx]
+
+            y_pred_shuf = model.predict(X_shuffled, verbose=0).flatten()
+            pred_dir_shuf = np.sign(y_pred_shuf[1:] - y_ref)
+            shuffled_acc = float(np.mean(y_true_dir == pred_dir_shuf))
+            drops.append(baseline_acc - shuffled_acc)
+
+        importance[feat_name] = float(np.mean(drops))
+
+    return importance
 
 
 def evaluate_single(

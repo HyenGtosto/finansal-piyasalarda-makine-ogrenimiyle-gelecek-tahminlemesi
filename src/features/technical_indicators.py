@@ -91,6 +91,35 @@ def add_price_features(df: pd.DataFrame) -> pd.DataFrame:
     return df
 
 
+def add_derived_signals(df: pd.DataFrame) -> pd.DataFrame:
+    """Crossover and overbought/oversold signals derived from existing indicators.
+
+    MACD_Cross  :  1 when MACD line crossed above Signal this bar (golden cross)
+                  -1 when MACD line crossed below Signal (death cross), 0 otherwise
+    RSI_Zone    :  1 = overbought (RSI > 70), -1 = oversold (RSI < 30), 0 = neutral
+    Price_Above_SMA20: 1 when close is above SMA20, -1 when below
+    """
+    df = df.copy()
+
+    if "MACD_pct" in df.columns and "MACD_Signal_pct" in df.columns:
+        above_now  = df["MACD_pct"] > df["MACD_Signal_pct"]
+        above_prev = above_now.shift(1).fillna(False).astype(bool)
+        df["MACD_Cross"] = 0
+        df.loc[ above_now & ~above_prev, "MACD_Cross"] =  1   # just crossed up
+        df.loc[~above_now &  above_prev, "MACD_Cross"] = -1   # just crossed down
+
+    if "RSI14" in df.columns:
+        df["RSI_Zone"] = 0
+        df.loc[df["RSI14"] > 70, "RSI_Zone"] =  1
+        df.loc[df["RSI14"] < 30, "RSI_Zone"] = -1
+
+    if "SMA20_ratio" in df.columns:
+        # SMA20_ratio = SMA20/close; ratio < 1 means close > SMA20 (price above MA)
+        df["Price_Above_SMA20"] = (df["SMA20_ratio"] < 1).astype(int) * 2 - 1
+
+    return df
+
+
 def add_targets(df: pd.DataFrame, horizon: int = 1) -> pd.DataFrame:
     """Add classification and regression target columns.
 
@@ -148,6 +177,7 @@ def build_features(
     df = add_macd(df)
     df = add_bollinger(df)
     df = add_price_features(df)
+    df = add_derived_signals(df)
     df = add_sentiment(df, sentiment_series)
     df = add_targets(df, target_horizon)
     df.dropna(inplace=True)
@@ -179,6 +209,9 @@ FEATURES_TECHNICAL = [
     "BB_Width",
     "Price_Change",
     "HL_Pct",
+    "MACD_Cross",
+    "RSI_Zone",
+    "Price_Above_SMA20",
 ]
 
 FEATURES_WITH_SENTIMENT = FEATURES_TECHNICAL + ["Sentiment"]
