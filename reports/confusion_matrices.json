@@ -1,0 +1,122 @@
+{
+  "baseline_market_features:LogisticRegression": [
+    [
+      68,
+      102
+    ],
+    [
+      73,
+      86
+    ]
+  ],
+  "baseline_market_features:RandomForestClassifier": [
+    [
+      111,
+      59
+    ],
+    [
+      112,
+      47
+    ]
+  ],
+  "baseline_market_features:SVM_RBF": [
+    [
+      102,
+      68
+    ],
+    [
+      104,
+      55
+    ]
+  ],
+  "baseline_market_features:XGBoost": [
+    [
+      88,
+      82
+    ],
+    [
+      99,
+      60
+    ]
+  ],
+  "market_plus_sentiment_core:LogisticRegression": [
+    [
+      69,
+      101
+    ],
+    [
+      84,
+      75
+    ]
+  ],
+  "market_plus_sentiment_core:RandomForestClassifier": [
+    [
+      82,
+      88
+    ],
+    [
+      102,
+      57
+    ]
+  ],
+  "market_plus_sentiment_core:SVM_RBF": [
+    [
+      67,
+      103
+    ],
+    [
+      67,
+      92
+    ]
+  ],
+  "market_plus_sentiment_core:XGBoost": [
+    [
+      95,
+      75
+    ],
+    [
+      93,
+      66
+    ]
+  ],
+  "market_plus_sentiment_core_derived:LogisticRegression": [
+    [
+      82,
+      88
+    ],
+    [
+      90,
+      69
+    ]
+  ],
+  "market_plus_sentiment_core_derived:RandomForestClassifier": [
+    [
+      63,
+      107
+    ],
+    [
+      82,
+      77
+    ]
+  ],
+  "market_plus_sentiment_core_derived:SVM_RBF": [
+    [
+      66,
+      104
+    ],
+    [
+      75,
+      84
+    ]
+  ],
+  "market_plus_sentiment_core_derived:XGBoost": [
+    [
+      77,
+      93
+    ],
+    [
+      81,
+      78
+    ]
+  ]
+}
