@@ -1,0 +1,26 @@
+@startuml
+left to right direction
+skinparam shadowing false
+skinparam nodesep 60
+skinparam ranksep 60
+
+database "final_dataset.csv" as Final
+rectangle "Chronological\nSplit" as Split
+rectangle "Model Training" as Training
+rectangle "Metric\nEvaluation" as Metrics
+database "model_results.csv" as Results
+database "confusion_matrices.json" as Confusion
+rectangle "Plot\nGeneration" as Plotting
+database "reports/figures" as Figures
+rectangle "Tkinter UI" as UI
+
+Final --> Split : 70% train\n15% validation\n15% test
+Split --> Training : same test\nperiod
+Training --> Metrics : predictions
+Metrics --> Results : accuracy\nroc_auc\nf1\nprecision\nrecall
+Metrics --> Confusion : 2x2 matrices
+Results --> Plotting
+Confusion --> Plotting
+Plotting --> Figures : PNG reports
+Figures --> UI : selected plot\nshown on right panel
+@enduml

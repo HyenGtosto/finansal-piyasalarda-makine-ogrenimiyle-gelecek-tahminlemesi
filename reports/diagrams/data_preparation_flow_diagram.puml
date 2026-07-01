@@ -1,0 +1,28 @@
+@startuml
+left to right direction
+skinparam shadowing false
+skinparam nodesep 60
+skinparam ranksep 60
+
+rectangle "CoinGecko API" as CoinGecko
+rectangle "GetXAPI" as GetXAPI
+database "bitcoin_price_raw.csv" as PriceRaw
+database "bitcoin_getxapi_tweets_raw.csv" as TweetRaw
+rectangle "Tweet Column\nTrimming" as Trim
+rectangle "Tweet Text\nCleaning" as Clean
+rectangle "Sentiment Score\nand Label" as Sentiment
+rectangle "Engagement\nWeighting" as Weight
+database "final_dataset.csv" as Final
+
+CoinGecko --> PriceRaw : hourly price\nmarket cap\nvolume
+GetXAPI --> TweetRaw : bitcoin tweets\nfiltered text
+
+TweetRaw --> Trim : remove unused\nraw columns
+Trim --> Clean : remove URLs\nemoji cleanup
+Clean --> Sentiment : sentiment_score\nsentiment_label
+Clean --> Weight : engagement_score\nengagement_weight
+
+PriceRaw --> Final : 4h price\naggregation
+Sentiment --> Final : 4h sentiment\naggregation
+Weight --> Final : weighted\nsentiment
+@enduml

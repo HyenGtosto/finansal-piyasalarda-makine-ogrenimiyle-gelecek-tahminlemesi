@@ -2,20 +2,21 @@
 
 from __future__ import annotations
 
-import subprocess
+import contextlib
+import io
+import os
 import sys
 import threading
 import tkinter as tk
-import os
 from pathlib import Path
 from tkinter import messagebox, ttk
 
 
-PROJECT_ROOT = Path(__file__).resolve().parents[2]
+if getattr(sys, "frozen", False):
+    PROJECT_ROOT = Path(sys.executable).resolve().parent
+else:
+    PROJECT_ROOT = Path(__file__).resolve().parents[2]
 FIGURE_DIR = PROJECT_ROOT / "reports" / "figures"
-DATASET_SCRIPT = PROJECT_ROOT / "scripts" / "run_model_dataset_pipeline.py"
-TRAINING_SCRIPT = PROJECT_ROOT / "scripts" / "run_model_training.py"
-PLOT_SCRIPT = PROJECT_ROOT / "scripts" / "run_model_result_plots.py"
 MPL_CONFIG_DIR = PROJECT_ROOT / ".matplotlib"
 os.environ.setdefault("MPLCONFIGDIR", str(MPL_CONFIG_DIR))
 
@@ -81,31 +82,26 @@ class ModelReportApp(tk.Tk):
             self._set_children_state(child, state)
 
     def _run_training_pipeline(self) -> None:
+        os.chdir(PROJECT_ROOT)
         MPL_CONFIG_DIR.mkdir(exist_ok=True)
-        environment = os.environ.copy()
-        environment["MPLCONFIGDIR"] = str(MPL_CONFIG_DIR)
-        commands = [
-            [sys.executable, str(DATASET_SCRIPT)],
-            [sys.executable, str(TRAINING_SCRIPT)],
-            [sys.executable, str(PLOT_SCRIPT)],
-        ]
+        os.environ["MPLCONFIGDIR"] = str(MPL_CONFIG_DIR)
         output_parts: list[str] = []
 
-        for command in commands:
-            result = subprocess.run(
-                command,
-                cwd=PROJECT_ROOT,
-                env=environment,
-                capture_output=True,
-                text=True,
-                check=False,
-            )
-            output_parts.append(result.stdout)
-            output_parts.append(result.stderr)
-            if result.returncode != 0:
-                error_text = "\n".join(part for part in output_parts if part.strip())
-                self.after(0, lambda: self._show_training_error(error_text))
-                return
+        try:
+            from src.features.build_model_dataset import main as build_dataset
+            from src.models.train_model_comparison import main as train_models
+            from src.visualization.plot_model_results import main as plot_results
+
+            for step in [build_dataset, train_models, plot_results]:
+                buffer = io.StringIO()
+                with contextlib.redirect_stdout(buffer), contextlib.redirect_stderr(buffer):
+                    step()
+                output_parts.append(buffer.getvalue())
+        except Exception as exc:
+            output_parts.append(str(exc))
+            error_text = "\n".join(part for part in output_parts if part.strip())
+            self.after(0, lambda: self._show_training_error(error_text))
+            return
 
         self.after(0, self._show_report_screen)
 

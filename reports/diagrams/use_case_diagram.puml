@@ -1,0 +1,29 @@
+@startuml
+left to right direction
+actor "Araştırmacı / Proje Kullanıcısı" as User
+
+rectangle "Bitcoin Tweet Sentiment ML Sistemi" {
+  usecase "Bitcoin fiyat verisini toplama" as UC1
+  usecase "Tweet verisini toplama" as UC2
+  usecase "Tweet metnini temizleme" as UC3
+  usecase "Sentiment skoru ekleme" as UC4
+  usecase "Final veri setini oluşturma" as UC5
+  usecase "Makine öğrenmesi modellerini çalıştırma" as UC6
+  usecase "Performans grafiklerini oluşturma" as UC7
+  usecase "Rapor görsellerini arayüzde görüntüleme" as UC8
+}
+
+User --> UC1
+User --> UC2
+User --> UC3
+User --> UC4
+User --> UC5
+User --> UC6
+User --> UC7
+User --> UC8
+
+UC5 ..> UC1 : <<include>>
+UC5 ..> UC4 : <<include>>
+UC7 ..> UC6 : <<include>>
+UC8 ..> UC7 : <<include>>
+@enduml

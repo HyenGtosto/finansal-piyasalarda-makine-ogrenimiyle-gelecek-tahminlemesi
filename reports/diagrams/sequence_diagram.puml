@@ -1,0 +1,24 @@
+@startuml
+actor "Kullanıcı" as User
+participant "ModelReportApp" as UI
+participant "run_model_dataset_pipeline.py" as Dataset
+participant "run_model_training.py" as Training
+participant "run_model_result_plots.py" as Plotting
+database "data/processed/final_dataset.csv" as FinalData
+database "reports/model_results.csv" as Results
+database "reports/figures/*.png" as Figures
+
+User -> UI : Run machine learning models
+UI -> Dataset : subprocess ile çalıştır
+Dataset -> FinalData : final veri setini üret
+UI -> Training : subprocess ile çalıştır
+Training -> FinalData : oku
+Training -> Results : metrikleri yaz
+UI -> Plotting : subprocess ile çalıştır
+Plotting -> Results : oku
+Plotting -> Figures : grafik PNG dosyalarını üret
+UI -> Figures : dosya listesini oku
+User -> UI : soldaki rapor butonuna tıkla
+UI -> Figures : seçilen görseli yükle
+UI -> User : grafiği sağ panelde göster
+@enduml

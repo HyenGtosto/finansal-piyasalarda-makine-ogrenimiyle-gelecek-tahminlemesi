@@ -22,9 +22,13 @@ matplotlib
 seaborn
 plotly
 kaleido
+streamlit
 
 # Config parsing
 pyyaml
+
+# Packaging
+pyinstaller
 
 # Existing tweet / price pipeline dependencies
 requests

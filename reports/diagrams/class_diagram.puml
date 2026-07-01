@@ -1,0 +1,77 @@
+@startuml
+skinparam classAttributeIconSize 0
+
+class "BitcoinPriceDownloader" {
+  +fetch_bitcoin_market_data()
+  +fetch_bitcoin_hourly_market_data()
+  +build_price_dataframe()
+  +save_raw_data()
+}
+
+class "GetXAPITweetDownloader" {
+  +read_price_date_range()
+  +fetch_tweets_for_query()
+  +download_tweets_for_date_range()
+  +save_tweets()
+}
+
+class "TweetTextCleaner" {
+  +clean_tweet_text()
+  +clean_tweet_file()
+}
+
+class "TweetColumnTrimmer" {
+  +trim_tweet_columns()
+}
+
+class "EngagementWeightBuilder" {
+  +calculate_engagement_score()
+  +calculate_engagement_weight()
+  +create_tweet_engagement_weights()
+}
+
+class "ModelDatasetBuilder" {
+  +build_price_features()
+  +build_sentiment_features()
+  +add_leakage_safe_features()
+  +build_final_dataset()
+  +validate_final_dataset()
+}
+
+class "ModelComparisonTrainer" {
+  +chronological_split()
+  +train_logistic_regression()
+  +train_random_forest()
+  +train_gradient_boosting()
+  +train_svm()
+  +evaluate_predictions()
+  +run_model_comparison()
+}
+
+class "ModelResultPlotter" {
+  +plot_metric_comparison()
+  +plot_feature_set_auc()
+  +plot_model_heatmap()
+  +plot_confusion_matrices()
+}
+
+class "ModelReportApp" {
+  +_start_training()
+  +_run_training_pipeline()
+  +_show_report_screen()
+  +_display_figure()
+}
+
+BitcoinPriceDownloader --> ModelDatasetBuilder : fiyat verisi
+GetXAPITweetDownloader --> TweetColumnTrimmer : ham tweet
+TweetColumnTrimmer --> TweetTextCleaner : azaltılmış kolonlar
+TweetTextCleaner --> EngagementWeightBuilder : temiz metin
+EngagementWeightBuilder --> ModelDatasetBuilder : engagement_weight
+ModelDatasetBuilder --> ModelComparisonTrainer : final_dataset.csv
+ModelComparisonTrainer --> ModelResultPlotter : model_results.csv
+ModelComparisonTrainer --> ModelResultPlotter : confusion_matrices.json
+ModelReportApp --> ModelDatasetBuilder : pipeline çalıştırır
+ModelReportApp --> ModelComparisonTrainer : pipeline çalıştırır
+ModelReportApp --> ModelResultPlotter : grafik üretir
+ModelReportApp --> ModelResultPlotter : PNG görüntüler
+@enduml
